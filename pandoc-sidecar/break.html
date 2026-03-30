@@ -1,0 +1,99 @@
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='4' fill='%231a3a5c'/><rect x='7' y='7' width='18' height='2.5' rx='1' fill='white'/><rect x='7' y='12.5' width='18' height='2.5' rx='1' fill='white'/><rect x='7' y='18' width='13' height='2.5' rx='1' fill='white'/><rect x='7' y='23.5' width='9' height='2.5' rx='1' fill='white'/></svg>">
+<style>
+  body {
+    font-family: Segoe UI, Calibri, Arial, sans-serif;
+    max-width: 850px;
+    margin: 2em auto;
+    padding: 0 2em;
+    line-height: 1.6;
+    color: #1a1a1a;
+    font-size: 11pt;
+  }
+  h1 { font-size: 1.6em; color: #1a3a5c; border-bottom: 2px solid #1a3a5c; padding-bottom: 0.3em; }
+  h2 { font-size: 1.3em; color: #1a3a5c; border-bottom: 1px solid #ccc; padding-bottom: 0.2em; margin-top: 1.8em; }
+  h3 { font-size: 1.1em; color: #333; margin-top: 1.4em; }
+  blockquote { border-left: 4px solid #1a3a5c; margin: 1em 0; padding: 0.5em 1em; background: #f7f9fb; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+  code { background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.88em; }
+  pre { background: #f4f4f4; padding: 1em; border-radius: 4px; overflow-x: auto; border-left: 3px solid #1a3a5c; position: relative; }
+  pre code { background: none; padding: 0; font-size: 0.9em; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin-bottom: 0.3em; }
+  strong { color: #1a1a1a; }
+  a { color: #1a5c8e; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wiki-link-missing { color: #aaa; text-decoration: line-through; cursor: default; }
+  img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+  kbd {
+    display: inline-block; padding: 0.15em 0.45em; font-size: 0.82em;
+    font-family: Consolas, monospace; color: #333; background: #f5f5f5;
+    border: 1px solid #ccc; border-bottom: 2px solid #aaa; border-radius: 3px; white-space: nowrap;
+  }
+
+  /* Tables */
+  table { border-collapse: collapse; width: 100%; margin: 1.5em 0; font-size: 0.93em; }
+  thead tr { background-color: #1a3a5c; color: white; }
+  th { padding: 0.65em 1em; text-align: left; font-weight: 600; border: 1px solid #15304d; }
+  td { padding: 0.55em 1em; border: 1px solid #dde2e8; vertical-align: top; }
+  tr.even td { background-color: #f5f8fc; }
+  tr.odd  td { background-color: #ffffff; }
+  tbody tr:hover td { background-color: #edf2f8; }
+
+  /* Table of contents */
+  nav#TOC {
+    background: #f7f9fb;
+    border: 1px solid #dde2e8;
+    border-radius: 4px;
+    padding: 0.8em 1.2em;
+    margin-bottom: 2em;
+    display: inline-block;
+    min-width: 220px;
+    max-width: 100%;
+  }
+  nav#TOC > ul { margin: 0; padding-left: 1.2em; }
+  nav#TOC ul { list-style: disc; }
+  nav#TOC li { margin-bottom: 0.2em; font-size: 0.95em; }
+  nav#TOC a { color: #1a5c8e; }
+  nav#TOC p { margin: 0 0 0.4em 0; font-weight: 700; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
+
+  /* Callout boxes */
+  .callout { border-left: 4px solid; padding: 0.6em 1em; margin: 1.2em 0; border-radius: 0 4px 4px 0; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: 0.25em; font-size: 0.93em; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout-note      { border-color: #1a5c8e; background: #f0f6fc; }
+  .callout-note      .callout-title { color: #1a5c8e; }
+  .callout-tip       { border-color: #2a7a2a; background: #f0faf0; }
+  .callout-tip       .callout-title { color: #2a7a2a; }
+  .callout-important { border-color: #7a3a9a; background: #f8f0fc; }
+  .callout-important .callout-title { color: #7a3a9a; }
+  .callout-warning   { border-color: #b37800; background: #fffbf0; }
+  .callout-warning   .callout-title { color: #b37800; }
+  .callout-caution   { border-color: #c03030; background: #fff0f0; }
+  .callout-caution   .callout-title { color: #c03030; }
+
+  /* Print - H2 page breaks */
+  @media print {
+    body { max-width: none; margin: 0; padding: 0; font-size: 10pt; }
+    h1 { page-break-after: avoid; }
+    h2 { page-break-after: avoid; break-after: avoid; margin-top: 1.2em; }
+    h3 { page-break-after: avoid; break-after: avoid; }
+    h2, h3 { orphans: 3; widows: 3; }
+    p { orphans: 3; widows: 3; }
+    li { page-break-inside: avoid; break-inside: avoid; }
+    ul, ol { page-break-inside: avoid; break-inside: avoid; }
+    blockquote { page-break-inside: avoid; break-inside: avoid; }
+    pre { page-break-inside: avoid; break-inside: avoid; border-left: none; }
+    table { page-break-inside: avoid; break-inside: avoid; }
+    .callout { page-break-inside: avoid; break-inside: avoid; }
+    h1 + *, h2 + *, h3 + * { page-break-before: avoid; break-before: avoid; }
+    h2 { page-break-before: always; break-before: page; }
+    h2:first-of-type { page-break-before: avoid; break-before: avoid; }
+    hr { border: none; margin: 0; height: 0; }
+    a { text-decoration: none; color: inherit; }
+    a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.8em; color: #666; }
+    thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tr.even td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .callout { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    nav#TOC { border: none; background: none; padding: 0; }
+  }
+</style>

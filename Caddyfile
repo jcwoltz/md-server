@@ -1,0 +1,20 @@
+{
+    auto_https off
+}
+
+:80 {
+    root * /srv
+    file_server browse
+
+    @markdown path_regexp \.md(\.(break|toc|compact))*$
+    reverse_proxy @markdown pandoc-sidecar:3000
+
+    log {
+        output stdout
+        format console
+    }
+
+    handle_errors {
+        respond "Something went wrong" 500
+    }
+}
