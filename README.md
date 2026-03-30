@@ -81,6 +81,16 @@ ports:
   - "8095:80"  # change 8095 to whatever you want
 ```
 
+## Security
+
+This server has no authentication and serves over plain HTTP — intended for local or trusted-network use.
+
+Since it already uses Caddy, you can add security directly in the Caddyfile:
+
+- **Basic auth:** add a `basicauth` block ([Caddy docs](https://caddyserver.com/docs/caddyfile/directives/basicauth))
+- **HTTPS:** replace `:80` with your domain and remove `auto_https off` — Caddy handles certificates automatically
+- Or put it behind [Tailscale](https://tailscale.com/), [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), etc.
+
 ## License
 
 [Unlicense](LICENSE) — public domain. Do whatever you want with it.
