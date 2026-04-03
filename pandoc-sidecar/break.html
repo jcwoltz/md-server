@@ -19,7 +19,7 @@
   pre code { background: none; padding: 0; font-size: 0.9em; }
   ul, ol { padding-left: 1.5em; }
   li { margin-bottom: 0.3em; }
-  strong { color: #1a1a1a; }
+  strong { color: inherit; }
   a { color: #1a5c8e; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .wiki-link-missing { color: #aaa; text-decoration: line-through; cursor: default; }
@@ -35,8 +35,8 @@
   thead tr { background-color: #1a3a5c; color: white; }
   th { padding: 0.65em 1em; text-align: left; font-weight: 600; border: 1px solid #15304d; }
   td { padding: 0.55em 1em; border: 1px solid #dde2e8; vertical-align: top; }
-  tr.even td { background-color: #f5f8fc; }
-  tr.odd  td { background-color: #ffffff; }
+  tbody tr:nth-child(even) td { background-color: #f5f8fc; }
+  tbody tr:nth-child(odd)  td { background-color: #ffffff; }
   tbody tr:hover td { background-color: #edf2f8; }
 
   /* Table of contents */
@@ -92,7 +92,7 @@
     a { text-decoration: none; color: inherit; }
     a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.8em; color: #666; }
     thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    tr.even td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tbody tr:nth-child(even) td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .callout { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     nav#TOC { border: none; background: none; padding: 0; }
   }

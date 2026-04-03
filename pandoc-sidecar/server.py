@@ -12,9 +12,103 @@ SERVE_DIR = '/srv'
 STYLES_DIR = '/app'
 
 
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'}
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogv', '.mov'}
+AUDIO_EXTENSIONS = {'.mp3', '.ogg', '.wav', '.flac', '.m4a'}
+
+
+def _find_file(filename, file_dir, srv_dir):
+    """Resolve a filename to an absolute path within srv_dir.
+
+    Search order: same directory, recursive exact match, case-insensitive fallback.
+    Returns the absolute path or None.
+    """
+    # 1. Same directory
+    same_dir = os.path.join(file_dir, filename)
+    if os.path.exists(same_dir):
+        return same_dir
+
+    # 2. Recursive search (exact name)
+    matches = glob.glob(os.path.join(srv_dir, '**', filename), recursive=True)
+
+    # 3. Case-insensitive fallback
+    if not matches:
+        target_lower = filename.lower()
+        ext = os.path.splitext(filename)[1]
+        pattern = '*' + ext if ext else '*'
+        matches = [
+            f for f in glob.glob(os.path.join(srv_dir, '**', pattern), recursive=True)
+            if os.path.basename(f).lower() == target_lower
+        ]
+
+    if matches:
+        matches.sort(key=len)  # prefer shortest (least-nested) path
+        return matches[0]
+
+    return None
+
+
+def _make_url(abs_path, srv_dir):
+    """Build a URL-encoded path relative to srv_dir."""
+    rel = os.path.relpath(abs_path, srv_dir).replace(os.sep, '/')
+    return '/' + urllib.parse.quote(rel)
+
+
 def resolve_wiki_links(content, file_path, srv_dir):
-    """Convert Obsidian [[wiki links]] to markdown links, resolved against the vault."""
+    """Convert Obsidian [[wiki links]] and ![[embeds]] to HTML, resolved against the vault."""
     file_dir = os.path.dirname(file_path)
+
+    def resolve_embed(m):
+        inner = m.group(1)
+
+        # Split on | for alt text / dimensions: ![[image.png|300]] or ![[image.png|alt text]]
+        if '|' in inner:
+            target_part, alt = inner.split('|', 1)
+            alt = alt.strip()
+        else:
+            target_part = inner
+            alt = ''
+
+        filename = target_part.strip()
+        if not filename:
+            return m.group(0)
+
+        ext = os.path.splitext(filename)[1].lower()
+
+        # Try to find the file (with extension as-is, then .md fallback)
+        found = _find_file(filename, file_dir, srv_dir)
+        if not found and not ext:
+            found = _find_file(filename + '.md', file_dir, srv_dir)
+
+        if not found:
+            return f'<span class="wiki-link-missing" title="Not found: {filename}">{filename}</span>'
+
+        url = _make_url(found, srv_dir)
+        found_ext = os.path.splitext(found)[1].lower()
+
+        if found_ext in IMAGE_EXTENSIONS:
+            # Parse dimensions from alt: "300", "300x200"
+            dim_match = re.match(r'^(\d+)(?:x(\d+))?$', alt)
+            if dim_match:
+                w = dim_match.group(1)
+                h = dim_match.group(2)
+                style = f'width:{w}px;' + (f'height:{h}px;' if h else '')
+                return f'<img src="{url}" alt="{filename}" style="{style}">'
+            alt_text = alt if alt else filename
+            return f'![{alt_text}]({url})'
+
+        if found_ext in VIDEO_EXTENSIONS:
+            return f'<video controls src="{url}"></video>'
+
+        if found_ext in AUDIO_EXTENSIONS:
+            return f'<audio controls src="{url}"></audio>'
+
+        if found_ext == '.pdf':
+            return f'<iframe src="{url}" style="width:100%;height:600px;border:none;"></iframe>'
+
+        # Non-media file — link to it
+        label = alt if alt else filename
+        return f'[{label}]({url})'
 
     def replace_link(m):
         inner = m.group(1)
@@ -40,32 +134,22 @@ def resolve_wiki_links(content, file_path, srv_dir):
         if not filename:
             return f'[{label}]({anchor})'
 
-        # 1. Same directory
-        same_dir = os.path.join(file_dir, filename + '.md')
-        if os.path.exists(same_dir):
-            url = '/' + os.path.relpath(same_dir, srv_dir).replace(os.sep, '/')
-            return f'[{label}]({url}{anchor})'
+        # Try .md first, then exact filename (for non-md files)
+        found = _find_file(filename + '.md', file_dir, srv_dir)
+        if not found and '.' in filename:
+            found = _find_file(filename, file_dir, srv_dir)
 
-        # 2. Recursive search (exact name)
-        matches = glob.glob(os.path.join(srv_dir, '**', filename + '.md'), recursive=True)
-
-        # 3. Case-insensitive fallback
-        if not matches:
-            target_lower = (filename + '.md').lower()
-            matches = [
-                f for f in glob.glob(os.path.join(srv_dir, '**', '*.md'), recursive=True)
-                if os.path.basename(f).lower() == target_lower
-            ]
-
-        if matches:
-            matches.sort(key=len)  # prefer shortest (least-nested) path
-            url = '/' + os.path.relpath(matches[0], srv_dir).replace(os.sep, '/')
+        if found:
+            url = _make_url(found, srv_dir)
             return f'[{label}]({url}{anchor})'
 
         # Not found — render as struck-through text with tooltip
         return f'<span class="wiki-link-missing" title="Not found: {filename}">{label}</span>'
 
-    return re.sub(r'\[\[([^\]]+?)\]\]', replace_link, content)
+    # Process embeds first, then links
+    content = re.sub(r'!\[\[([^\]]+?)\]\]', resolve_embed, content)
+    content = re.sub(r'\[\[([^\]]+?)\]\]', replace_link, content)
+    return content
 
 
 class PandocHandler(BaseHTTPRequestHandler):
@@ -128,6 +212,13 @@ class PandocHandler(BaseHTTPRequestHandler):
         # DRAFT watermark from frontmatter
         is_draft = bool(re.search(r'^status:\s*DRAFT', content, re.MULTILINE | re.IGNORECASE))
 
+        # Document title: prefer frontmatter title, fall back to filename
+        title_match = re.search(r'^title:\s*(.+)', content, re.MULTILINE | re.IGNORECASE)
+        if title_match:
+            doc_title = title_match.group(1).strip().strip('"').strip("'")
+        else:
+            doc_title = os.path.splitext(filename)[0]
+
         if compact_mode:
             style_name = 'compact.html'
         elif break_mode:
@@ -159,6 +250,7 @@ class PandocHandler(BaseHTTPRequestHandler):
                 '--lua-filter=/app/callouts.lua',
                 f'--resource-path={os.path.dirname(file_path)}',
                 f'--include-in-header={style_file}',
+                f'--metadata=title:{doc_title}',
             ]
 
             if is_draft:
