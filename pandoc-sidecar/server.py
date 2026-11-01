@@ -1,155 +1,92 @@
 #!/usr/bin/env python3
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import subprocess
 import os
 import re
-import glob
+import html
+import threading
+import time
 import tempfile
 import urllib.parse
 from datetime import datetime
 
 SERVE_DIR = '/srv'
 STYLES_DIR = '/app'
+PANDOC_TIMEOUT = 60   # seconds before a pandoc run is killed
+INDEX_TTL = 5.0       # seconds before the filename index is rebuilt
+CACHE_MAX = 128       # rendered pages kept in memory
+GENERATED = b'@@MD-SERVER-GENERATED@@'   # footer timestamp, filled per request
 
 
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'}
-VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogv', '.mov'}
-AUDIO_EXTENSIONS = {'.mp3', '.ogg', '.wav', '.flac', '.m4a'}
+# ---------------------------------------------------------------------------
+# Vault index: every non-hidden file's path relative to SERVE_DIR, shortest
+# first, written to a temp file that obsidian.lua reads to resolve
+# [[wiki links]]. Rebuilt at most every INDEX_TTL.
+
+_index_lock = threading.Lock()
+_index = None
+_index_stamp = 0      # bumped whenever the file tree actually changes
+_index_built = 0.0
+_index_files = []     # current index file last; previous kept for in-flight renders
 
 
-def _find_file(filename, file_dir, srv_dir):
-    """Resolve a filename to an absolute path within srv_dir.
+def _get_index():
+    """Return (index file path, stamp)."""
+    global _index, _index_stamp, _index_built
+    with _index_lock:
+        now = time.monotonic()
+        if _index is not None and now - _index_built < INDEX_TTL:
+            return _index_files[-1], _index_stamp
+        srv = os.path.realpath(SERVE_DIR)
+        new = []
+        for root, dirs, files in os.walk(srv):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for name in files:
+                if not name.startswith('.'):
+                    new.append(os.path.relpath(os.path.join(root, name), srv))
+        new.sort(key=lambda p: (len(p), p))  # prefer shortest (least-nested) path
+        _index_built = now
+        if new != _index:
+            _index = new
+            _index_stamp += 1
+            with tempfile.NamedTemporaryFile(mode='w', prefix='md-index-', suffix='.txt',
+                                             delete=False, encoding='utf-8') as f:
+                f.write('\n'.join(new) + '\n')
+            _index_files.append(f.name)
+            while len(_index_files) > 2:
+                try:
+                    os.unlink(_index_files.pop(0))
+                except OSError:
+                    pass
+        return _index_files[-1], _index_stamp
 
-    Search order: same directory, recursive exact match, case-insensitive fallback.
-    Returns the absolute path or None.
-    """
-    # 1. Same directory
-    same_dir = os.path.join(file_dir, filename)
-    if os.path.exists(same_dir):
-        return same_dir
 
-    # 2. Recursive search (exact name)
-    matches = glob.glob(os.path.join(srv_dir, '**', filename), recursive=True)
+def _parse_frontmatter(content):
+    """Return (raw YAML frontmatter, offset where the body starts), or ('', 0)."""
+    m = re.match(r'---[ \t]*\n(.*?)\n(?:---|\.\.\.)[ \t]*(?:\n|\Z)', content, re.DOTALL)
+    return (m.group(1), m.end()) if m else ('', 0)
 
-    # 3. Case-insensitive fallback
-    if not matches:
-        target_lower = filename.lower()
-        ext = os.path.splitext(filename)[1]
-        pattern = '*' + ext if ext else '*'
-        matches = [
-            f for f in glob.glob(os.path.join(srv_dir, '**', pattern), recursive=True)
-            if os.path.basename(f).lower() == target_lower
-        ]
 
-    if matches:
-        matches.sort(key=len)  # prefer shortest (least-nested) path
-        return matches[0]
+# ---------------------------------------------------------------------------
+# Render cache: (path, style, toc) -> (mtime, index_stamp, html bytes)
 
+_cache_lock = threading.Lock()
+_render_cache = {}
+
+
+def _cache_get(key, mtime, stamp):
+    with _cache_lock:
+        entry = _render_cache.get(key)
+        if entry and entry[0] == mtime and entry[1] == stamp:
+            return entry[2]
     return None
 
 
-def _make_url(abs_path, srv_dir):
-    """Build a URL-encoded path relative to srv_dir."""
-    rel = os.path.relpath(abs_path, srv_dir).replace(os.sep, '/')
-    return '/' + urllib.parse.quote(rel)
-
-
-def resolve_wiki_links(content, file_path, srv_dir):
-    """Convert Obsidian [[wiki links]] and ![[embeds]] to HTML, resolved against the vault."""
-    file_dir = os.path.dirname(file_path)
-
-    def resolve_embed(m):
-        inner = m.group(1)
-
-        # Split on | for alt text / dimensions: ![[image.png|300]] or ![[image.png|alt text]]
-        if '|' in inner:
-            target_part, alt = inner.split('|', 1)
-            alt = alt.strip()
-        else:
-            target_part = inner
-            alt = ''
-
-        filename = target_part.strip()
-        if not filename:
-            return m.group(0)
-
-        ext = os.path.splitext(filename)[1].lower()
-
-        # Try to find the file (with extension as-is, then .md fallback)
-        found = _find_file(filename, file_dir, srv_dir)
-        if not found and not ext:
-            found = _find_file(filename + '.md', file_dir, srv_dir)
-
-        if not found:
-            return f'<span class="wiki-link-missing" title="Not found: {filename}">{filename}</span>'
-
-        url = _make_url(found, srv_dir)
-        found_ext = os.path.splitext(found)[1].lower()
-
-        if found_ext in IMAGE_EXTENSIONS:
-            # Parse dimensions from alt: "300", "300x200"
-            dim_match = re.match(r'^(\d+)(?:x(\d+))?$', alt)
-            if dim_match:
-                w = dim_match.group(1)
-                h = dim_match.group(2)
-                style = f'width:{w}px;' + (f'height:{h}px;' if h else '')
-                return f'<img src="{url}" alt="{filename}" style="{style}">'
-            alt_text = alt if alt else filename
-            return f'![{alt_text}]({url})'
-
-        if found_ext in VIDEO_EXTENSIONS:
-            return f'<video controls src="{url}"></video>'
-
-        if found_ext in AUDIO_EXTENSIONS:
-            return f'<audio controls src="{url}"></audio>'
-
-        if found_ext == '.pdf':
-            return f'<iframe src="{url}" style="width:100%;height:600px;border:none;"></iframe>'
-
-        # Non-media file — link to it
-        label = alt if alt else filename
-        return f'[{label}]({url})'
-
-    def replace_link(m):
-        inner = m.group(1)
-
-        # Split on | for display text: [[target|label]] or [[target]]
-        if '|' in inner:
-            target_part, display = inner.split('|', 1)
-        else:
-            target_part = inner
-            display = None
-
-        # Split on # for section anchors: [[file#heading]]
-        if '#' in target_part:
-            filename, section = target_part.split('#', 1)
-            anchor = '#' + re.sub(r'\s+', '-', section.strip().lower())
-        else:
-            filename = target_part
-            anchor = ''
-
-        filename = filename.strip()
-        label = display.strip() if display else target_part.strip()
-
-        if not filename:
-            return f'[{label}]({anchor})'
-
-        # Try .md first, then exact filename (for non-md files)
-        found = _find_file(filename + '.md', file_dir, srv_dir)
-        if not found and '.' in filename:
-            found = _find_file(filename, file_dir, srv_dir)
-
-        if found:
-            url = _make_url(found, srv_dir)
-            return f'[{label}]({url}{anchor})'
-
-        # Not found — render as struck-through text with tooltip
-        return f'<span class="wiki-link-missing" title="Not found: {filename}">{label}</span>'
-
-    # Process embeds first, then links
-    content = re.sub(r'!\[\[([^\]]+?)\]\]', resolve_embed, content)
-    content = re.sub(r'\[\[([^\]]+?)\]\]', replace_link, content)
-    return content
+def _cache_put(key, mtime, stamp, body):
+    with _cache_lock:
+        if len(_render_cache) >= CACHE_MAX:
+            _render_cache.clear()
+        _render_cache[key] = (mtime, stamp, body)
 
 
 class PandocHandler(BaseHTTPRequestHandler):
@@ -157,10 +94,14 @@ class PandocHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
 
+        if path == '/_assets/mermaid.min.js':
+            self.serve_asset('mermaid.min.js', 'text/javascript; charset=utf-8')
+            return
+
         # Strip known suffixes in any order
         break_mode = False
         toc_mode = False
-        compact_mode = False
+        full_mode = False
         changed = True
         while changed:
             changed = False
@@ -173,12 +114,21 @@ class PandocHandler(BaseHTTPRequestHandler):
                 toc_mode = True
                 changed = True
             elif path.endswith('.compact'):
-                path = path[:-8]
-                compact_mode = True
+                path = path[:-8]   # compact is the default; accepted for old links
+                changed = True
+            elif path.endswith('.full'):
+                path = path[:-5]
+                full_mode = True
                 changed = True
 
         if not path.endswith('.md'):
             self.send_error(404, 'Not a markdown file')
+            return
+
+        # Hidden files and folders (.obsidian, .git, ...) are not served,
+        # matching Caddy's `hide .*`
+        if any(part.startswith('.') for part in path.split('/') if part):
+            self.send_error(404, 'File not found')
             return
 
         # Prevent path traversal
@@ -192,49 +142,49 @@ class PandocHandler(BaseHTTPRequestHandler):
             self.send_error(404, 'File not found')
             return
 
-        # Read and preprocess
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        if break_mode:
+            style_name = 'break.html'
+        elif full_mode:
+            style_name = 'nobreak.html'
+        else:
+            style_name = 'compact.html'
+        style_file = os.path.join(STYLES_DIR, style_name)
 
-        content = resolve_wiki_links(content, file_path, real_srv)
-
-        # Doc-meta footer
         mtime = os.path.getmtime(file_path)
+        index_file, index_stamp = _get_index()
+        cache_key = (file_path, style_name, toc_mode)
+        cached = _cache_get(cache_key, mtime, index_stamp)
+        if cached is not None:
+            self.send_html(cached)
+            return
+
+        # Read only for frontmatter; pandoc reads the file itself
+        with open(file_path, 'r', encoding='utf-8-sig', errors='replace') as f:
+            content = f.read().replace('\r\n', '\n')
+
+        # Doc-meta footer. "Generated" is filled in at send time so cached
+        # pages still show when they were served.
         modified = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
-        generated = datetime.now().strftime('%Y-%m-%d %H:%M')
         filename = os.path.basename(file_path)
         footer_html = (
             f'<div class="doc-meta">'
-            f'Source: {filename} | Modified: {modified} | Generated: {generated}'
+            f'Source: {html.escape(filename)} | Modified: {modified} | '
+            f'Generated: {GENERATED.decode()}'
             f'</div>'
         )
 
-        # DRAFT watermark from frontmatter
-        is_draft = bool(re.search(r'^status:\s*DRAFT', content, re.MULTILINE | re.IGNORECASE))
-
-        # Document title: prefer frontmatter title, fall back to filename
-        title_match = re.search(r'^title:\s*(.+)', content, re.MULTILINE | re.IGNORECASE)
+        # Frontmatter: DRAFT watermark and document title
+        frontmatter, frontmatter_end = _parse_frontmatter(content)
+        is_draft = bool(re.search(r'^status:\s*DRAFT', frontmatter, re.MULTILINE | re.IGNORECASE))
+        title_match = re.search(r'^title:\s*(.+)', frontmatter, re.MULTILINE | re.IGNORECASE)
         if title_match:
             doc_title = title_match.group(1).strip().strip('"').strip("'")
         else:
             doc_title = os.path.splitext(filename)[0]
 
-        if compact_mode:
-            style_name = 'compact.html'
-        elif break_mode:
-            style_name = 'break.html'
-        else:
-            style_name = 'nobreak.html'
-        style_file = os.path.join(STYLES_DIR, style_name)
         tmp_files = []
 
         try:
-            # Preprocessed content as temp .md
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-                f.write(content)
-                content_tmp = f.name
-            tmp_files.append(content_tmp)
-
             # Footer temp file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
                 f.write(footer_html)
@@ -242,15 +192,18 @@ class PandocHandler(BaseHTTPRequestHandler):
             tmp_files.append(footer_tmp)
 
             cmd = [
-                'pandoc', content_tmp,
-                '-f', 'gfm+hard_line_breaks',
+                'pandoc', file_path,
+                '-f', 'gfm+hard_line_breaks+yaml_metadata_block+wikilinks_title_after_pipe',
                 '-t', 'html5',
                 '--standalone',
                 '--syntax-highlighting=kate',
+                '--lua-filter=/app/obsidian.lua',
                 '--lua-filter=/app/callouts.lua',
+                '--lua-filter=/app/mermaid.lua',
                 f'--resource-path={os.path.dirname(file_path)}',
                 f'--include-in-header={style_file}',
-                f'--metadata=title:{doc_title}',
+                # pagetitle sets <title> only; title would add a second H1
+                f'--metadata=pagetitle:{doc_title}',
             ]
 
             if is_draft:
@@ -266,9 +219,26 @@ class PandocHandler(BaseHTTPRequestHandler):
             cmd += [
                 f'--include-after-body={footer_tmp}',
                 '--include-after-body=/app/copycode.html',
+                '--include-after-body=/app/mermaid.html',
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            env = dict(os.environ,
+                       MD_INDEX=index_file,
+                       MD_DOC=os.path.relpath(file_path, real_srv))
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True,
+                                        timeout=PANDOC_TIMEOUT, env=env)
+                if result.returncode != 0 and 'YAML' in result.stderr and frontmatter_end:
+                    # Obsidian tolerates frontmatter pandoc rejects (e.g. an
+                    # unrendered template's `date: {{date}}`); render without it
+                    print(f'bad frontmatter in {file_path}, rendering without it', flush=True)
+                    cmd[1] = '-'
+                    result = subprocess.run(cmd, input=content[frontmatter_end:],
+                                            capture_output=True, text=True,
+                                            timeout=PANDOC_TIMEOUT, env=env)
+            except subprocess.TimeoutExpired:
+                self.send_error(500, 'Pandoc timed out', f'No output after {PANDOC_TIMEOUT}s')
+                return
 
         finally:
             for f in tmp_files:
@@ -278,21 +248,43 @@ class PandocHandler(BaseHTTPRequestHandler):
                     pass
 
         if result.returncode != 0:
-            self.send_error(500, f'Pandoc error: {result.stderr}')
+            # The message goes in the status line, so keep pandoc's
+            # multi-line stderr in the body only
+            print(f'pandoc failed for {file_path}: {result.stderr}', flush=True)
+            self.send_error(500, 'Pandoc error', result.stderr)
             return
 
-        html = result.stdout.encode('utf-8')
+        body = result.stdout.encode('utf-8')
+        _cache_put(cache_key, mtime, index_stamp, body)
+        self.send_html(body)
+
+    def send_html(self, body):
+        body = body.replace(GENERATED, datetime.now().strftime('%Y-%m-%d %H:%M').encode())
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.send_header('Content-Length', str(len(html)))
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(html)
+        self.wfile.write(body)
+
+    def serve_asset(self, name, content_type):
+        asset = os.path.join(STYLES_DIR, name)
+        if not os.path.isfile(asset):
+            self.send_error(404, 'Asset not found')
+            return
+        with open(asset, 'rb') as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'public, max-age=86400')
+        self.end_headers()
+        self.wfile.write(data)
 
     def log_message(self, format, *args):
         print(f'{self.address_string()} - {format % args}', flush=True)
 
 
 if __name__ == '__main__':
-    server = HTTPServer(('0.0.0.0', 3000), PandocHandler)
+    server = ThreadingHTTPServer(('0.0.0.0', 3000), PandocHandler)
     print('Pandoc sidecar listening on :3000', flush=True)
     server.serve_forever()

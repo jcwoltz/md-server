@@ -35,12 +35,15 @@ Append suffixes to any `.md` URL to change the output:
 
 | Suffix | Effect |
 |--------|--------|
-| *(none)* | Default style, continuous flow |
+| *(none)* | Compact layout (default), continuous flow |
+| `.full` | Roomier layout, larger fonts |
 | `.break` | Page break before each H2 (for printing) |
-| `.compact` | Denser layout, smaller fonts |
 | `.toc` | Adds a table of contents |
+| `.compact` | Accepted for old links (same as default) |
 
 Suffixes combine: `doc.md.toc.break` gives you a TOC with page breaks.
+
+All modes follow your OS/browser dark-mode preference on screen; printed output always stays light.
 
 ### Callouts
 
@@ -51,15 +54,31 @@ GitHub-style alert syntax is supported:
 > This renders as a styled callout box.
 ```
 
-Supported types: `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`
+Supported types: the 5 GitHub alerts (`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`) plus Obsidian's extended set (`info`, `todo`, `abstract`, `quote`, `success`, `example`, `question`, `failure`, `danger`, `bug`, and their aliases).
+
+### Mermaid Diagrams
+
+Fenced code blocks with the `mermaid` language are rendered as diagrams client-side (mermaid.js is bundled into the sidecar image — no CDN needed at view time):
+
+````markdown
+```mermaid
+graph LR
+  A --> B
+```
+````
 
 ### Wiki Links
 
-Obsidian-style `[[wiki links]]` are resolved against the served directory. Supports `[[file]]`, `[[file|display text]]`, and `[[file#heading]]`.
+Obsidian-style `[[wiki links]]` are resolved against the served directory. Supports `[[file]]`, `[[file|display text]]`, and `[[file#heading]]`. Embeds (`![[image.png|300]]`, video, audio, PDF) are supported too. Links in frontmatter and inside code are left alone.
+
+### Highlights
+
+Obsidian `==highlighted text==` renders as a highlight (light, dark and print).
 
 ### Other
 
-- File browser for navigating directories
+- File browser for navigating directories; a directory containing `index.md` or `README.md` renders it instead of the raw listing
+- Automatic dark mode (`prefers-color-scheme`)
 - Copy button on code blocks
 - DRAFT watermark when frontmatter contains `status: DRAFT`
 - Footer with source filename and timestamps

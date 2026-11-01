@@ -1,21 +1,21 @@
-version: '3.8'
-
 services:
   pandoc-sidecar:
     build: ./pandoc-sidecar
     container_name: pandoc-sidecar-work
+    environment:
+      - TZ=${TZ:-America/New_York}
     volumes:
-      - ${DOCS_DIR:-./docs}:/srv:ro
+      - ${DOCS_DIR:-.}:/srv:ro
     restart: unless-stopped
 
   caddy:
-    image: caddy:latest
+    image: caddy:2.11-alpine
     container_name: caddy-md-work
     ports:
       - "8095:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${DOCS_DIR:-./docs}:/srv:ro
+      - ${DOCS_DIR:-.}:/srv:ro
     depends_on:
       - pandoc-sidecar
     restart: unless-stopped
